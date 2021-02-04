@@ -1,0 +1,51 @@
+adl_reg: 1
+data_scale: 1
+dataset_type: image
+dec_size:
+- 1024
+- 512
+- 1024
+dist_thresh: 10000
+enc_dest_size:
+- 8
+- 16
+enc_latent_size:
+- 8
+- 50
+enc_past_size:
+- 512
+- 256
+non_local_theta_size:
+- 256
+- 128
+- 64
+non_local_phi_size:
+- 256
+- 128
+- 64
+non_local_g_size:
+- 256
+- 128
+- 64
+non_local_dim: 128
+fdim: 16
+future_length: 6
+gpu_index: 0
+kld_reg: 1
+learning_rate: 0.001
+mu: 0
+n_values: 20
+nonlocal_pools: 3
+normalize_type: shift_origin
+num_epochs: 6500
+num_workers: 0
+past_length: 5
+predictor_hidden_size:
+- 1024
+- 512
+- 256
+sigma: 100
+test_b_size: 1
+time_thresh: 0.6
+train_b_size: 512
+zdim: 16

@@ -34,7 +34,7 @@ gpu_index: 0
 kld_reg: 1
 learning_rate: 0.001
 mu: 0
-n_values: 20
+n_values: 6
 nonlocal_pools: 3
 normalize_type: shift_origin
 num_epochs: 6500
@@ -44,8 +44,10 @@ predictor_hidden_size:
 - 1024
 - 512
 - 256
-sigma: 100
+sigma: 2
 test_b_size: 1
 time_thresh: 0.6
 train_b_size: 512
 zdim: 16
+goal_sd: 0.15
+future_sd: 0.15

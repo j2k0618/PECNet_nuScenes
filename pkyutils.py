@@ -49,6 +49,68 @@ def calculateCurve(points):
 
     return angle
 
+'''for sanity check'''
+def naive_social(p1_key, p2_key, all_data_dict):
+	if abs(p1_key-p2_key)<4:
+		return True
+	else:
+		return False
+
+def find_min_time(t1, t2):
+	'''given two time frame arrays, find then min dist (time)'''
+	min_d = 9e4
+	t1, t2 = t1[:8], t2[:8]
+
+	for t in t2:
+		if abs(t1[0]-t)<min_d:
+			min_d = abs(t1[0]-t)
+
+	for t in t1:
+		if abs(t2[0]-t)<min_d:
+			min_d = abs(t2[0]-t)
+
+	return min_d
+
+def find_min_dist(p1x, p1y, p2x, p2y):
+	'''given two time frame arrays, find then min dist'''
+	min_d = 9e4
+	p1x, p1y = p1x[:8], p1y[:8]
+	p2x, p2y = p2x[:8], p2y[:8]
+
+	for i in range(len(p2x)):
+		for j in range(len(p1x)):
+			if ((p2x[i]-p1x[j])**2 + (p2y[i]-p1y[j])**2)**0.5 < min_d:
+				min_d = ((p2x[i]-p1x[j])**2 + (p2y[i]-p1y[j])**2)**0.5
+
+	return min_d
+
+def social_and_temporal_filter(p1_key, p2_key, all_data_dict, time_thresh=48, dist_tresh=100):
+	p1_traj, p2_traj = np.array(all_data_dict[p1_key]), np.array(all_data_dict[p2_key])
+	p1_time, p2_time = p1_traj[:,1], p2_traj[:,1]
+	p1_x, p2_x = p1_traj[:,2], p2_traj[:,2]
+	p1_y, p2_y = p1_traj[:,3], p2_traj[:,3]
+
+	if find_min_time(p1_time, p2_time)>time_thresh:
+		return False
+	if find_min_dist(p1_x, p1_y, p2_x, p2_y)>dist_tresh:
+		return False
+
+	return True
+
+def mark_similar(mask, sim_list):
+	# print(len(mask))
+	# print(len(sim_list))
+	for i in range(len(sim_list)):
+		for j in range(len(sim_list)):
+			mask[sim_list[i]][sim_list[j]] = 1
+
+def initial_position(traj_batches):
+	batches = []
+	for b in traj_batches:
+		starting_pos = b[:,4,:].copy()/1000 #starting pos is end of past, start of future. scaled down.
+		batches.append(starting_pos)
+
+	return batches
 
 # Data parser for NuScenes
 class NusCustomParser(Dataset):
@@ -563,12 +625,12 @@ def nuscenes_pecnet_collate(batch, test_set=False):
         # print(past_agents_traj_len[3][future_agent_masks[3]])
         # print(future_agents_traj_len)
 
+        num_future_agents = np.array([len(x) for x in future_agents_traj])
+
         current_path = []
         preprocessed = []
-        num_agents = np.array([min(len(x), len(y)) for x, y in zip(future_agents_traj, past_agents_traj)])
-        path_len = np.array([past_len[future_agent_masks[i]] + future_len == 10 for i, (past_len, future_len) in enumerate(list(zip(past_agents_traj_len, future_agents_traj_len)))])
         
-        past_agents_traj = np.array([x[future_agent_masks[i]] for i, x in enumerate(past_agents_traj)])
+        past_agents_traj = np.array([x[future_agent_masks[i]][:,::-1] for i, x in enumerate(past_agents_traj)])
         decode_start_pos = np.array([x[future_agent_masks[i]] for i, x in enumerate(decode_start_pos)])
         past_agents_traj = np.concatenate(past_agents_traj, axis=0)
         curr_agents_traj = np.concatenate(decode_start_pos, axis=0)
@@ -576,37 +638,32 @@ def nuscenes_pecnet_collate(batch, test_set=False):
         future_agents_traj = np.concatenate(future_agents_traj, axis=0)
 
         total_agents_traj = np.concatenate((past_agents_traj, curr_agents_traj, future_agents_traj), axis=1)
-        len_path = total_agents_traj.shape[2]
+        # import pdb
+        # pdb.set_trace()
+        len_path = total_agents_traj.shape[1]
+        total_agent_num = total_agents_traj.shape[0]
         frame_id = np.arange(0, len_path).reshape(-1,1) * 0.5
         
         frame_list = []
-        for i in range(batch_size):
-            agent_frame_id = []
-            for num in range(num_agents[i]):
-                agent_frame_id.append(frame_id)
-            agent_frame_id = np.array(agent_frame_id)
-            frame_list.append(agent_frame_id)
+        for i in range(total_agent_num):
+            frame_list.append(frame_id)
         frame_list = np.array(frame_list)
 
         agent_list = []
-        for i in range(batch_size):
-            agent_agent_id = []
-            for num in range(num_agents[i]):
-                agent_id_list = np.tile(np.array(num), (len_path,1))
-                agent_agent_id.append(agent_id_list)
-            agent_agent_id = np.array(agent_agent_id)
-            agent_list.append(agent_agent_id)
+        for i in range(total_agent_num):
+            agent_id_list = np.tile(np.array(i), (len_path,1))
+            agent_list.append(agent_id_list)
         agent_list = np.array(agent_list)
 
-        print(frame_list.shape)
-        print(agent_list.shape)
-        print(total_agents_traj.shape)
-        preprocessed = np.concatenate((frame_list, agent_list, total_agents_traj), axis=3)
+        # print(frame_list.shape)
+        # print(agent_list.shape)
+        # print(total_agents_traj.shape)
+        preprocessed = np.concatenate((frame_list, agent_list, total_agents_traj), axis=2)
 
         ####################
         ### Preprocesing ###
         ####################
-        mask_batch = [[0 for i in range(int(agent_num*1.5))] for j in range(int(agent_num*1.5))]
+        mask_batch = [[0 for i in range(int(total_agent_num*1.5))] for j in range(int(total_agent_num*1.5))]
         full_dataset = []
         full_masks = []
         current_batch = []
@@ -631,7 +688,7 @@ def nuscenes_pecnet_collate(batch, test_set=False):
             del data_by_id[curr_keys[0]]
 
             for i in range(1, len(curr_keys)):
-                if social_and_temporal_filter(curr_keys[0], curr_keys[i], all_data_dict, time_thresh, dist_tresh):
+                if social_and_temporal_filter(curr_keys[0], curr_keys[i], all_data_dict, time_thresh=0.6, dist_tresh=10000000000):
                     current_batch.append((all_data_dict[curr_keys[i]]))
                     related_list.append(current_size)
                     current_size+=1
@@ -647,7 +704,42 @@ def nuscenes_pecnet_collate(batch, test_set=False):
         ####################
         ####################
 
-    return 0
+        ###################################
+        ### Social Dataset Consturction ###
+        ###################################
+
+        traj, masks = full_dataset, full_masks
+        traj_new = []
+
+
+        for t in traj:
+            t = np.array(t)
+            t = t[:,:,2:]
+            traj_new.append(t)
+
+        masks_new = []
+        for m in masks:
+            masks_new.append(m)
+
+        traj_new = np.array(traj_new)
+        # print(traj_new.shape)
+        masks_new = np.array(masks_new)
+        trajectory_batches = traj_new.copy()
+        mask_batches = masks_new.copy()
+        initial_pos_batches = np.array(initial_position(trajectory_batches)) #for relative positioning
+        # print(initial_pos_batches)
+
+        ###################################
+        ###################################
+        ###################################
+
+        trajectory_batches = trajectory_batches[0]
+        mask_batches = mask_batches[0]
+        initial_pos_batches = initial_pos_batches[0]
+
+        map_image = torch.stack(map_image, dim=0)
+
+    return trajectory_batches, mask_batches, initial_pos_batches, scene_id, num_future_agents, map_image
 
 
 def nuscenes_collate(batch, test_set=False):

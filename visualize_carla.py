@@ -125,7 +125,7 @@ class Visualizer:
         self.crossmodal_attention = True
         self.beta = 0.1
 
-        self.load_file = 'nusc_model_real0.6.pt'
+        self.load_file = 'sd.pt'
         self.num_trajectories = 6
 
     def save_to_video(self, dataloader):
@@ -208,7 +208,7 @@ class Visualizer:
 
         checkpoint = torch.load('./saved_models/{}'.format(self.load_file), map_location=self.device)
         hyper_params = checkpoint["hyper_params"]
-        hyper_params['sigma'] = 2.5
+        hyper_params['sigma'] = 1.5
 
         N = self.num_trajectories #number of generated trajectories
         model = PECNet(hyper_params["enc_past_size"], hyper_params["enc_dest_size"], hyper_params["enc_latent_size"], hyper_params["dec_size"], hyper_params["predictor_hidden_size"], hyper_params['non_local_theta_size'], hyper_params['non_local_phi_size'], hyper_params['non_local_g_size'], hyper_params["fdim"], hyper_params["zdim"], hyper_params["nonlocal_pools"], hyper_params['non_local_dim'], hyper_params["sigma"], hyper_params["past_length"], hyper_params["future_length"], False)

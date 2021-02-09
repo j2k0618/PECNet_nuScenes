@@ -124,7 +124,13 @@ class Visualizer:
         self.crossmodal_attention = True
         self.beta = 0.1
 
-        self.load_file = 'nusc_model_real0.6.pt'
+        # self.load_file = 'sd_0.10.1.pt'
+        # self.load_file = 'sd_0.150.15.pt'
+        # self.load_file = 'nusc_model_nostop.pt.pt'
+        # self.load_file = 'normFSD.pt'
+        # self.load_file = 'FSD.pt'
+        # self.load_file = 'no_stop_normFSD.pt'
+        self.load_file = 'norm_changed.pt'
         self.num_trajectories = 6
 
     def save_to_video(self, dataloader):
@@ -159,7 +165,7 @@ class Visualizer:
             for j in range(len(predicted[i])):
                 paths = np.insert(predicted[i][j], 0, start[i][j], axis=1)
                 for path in paths:
-                    print(path)
+                    # print(path)
                     plt.plot(path[:, 0], path[:, 1], color='r')
 
             # print(results_dir + '/{}.png'.format(i))
@@ -207,7 +213,7 @@ class Visualizer:
 
         checkpoint = torch.load('./saved_models/{}'.format(self.load_file), map_location=self.device)
         hyper_params = checkpoint["hyper_params"]
-        hyper_params['sigma'] = 2.5
+        hyper_params['sigma'] = 2
 
         N = self.num_trajectories #number of generated trajectories
         model = PECNet(hyper_params["enc_past_size"], hyper_params["enc_dest_size"], hyper_params["enc_latent_size"], hyper_params["dec_size"], hyper_params["predictor_hidden_size"], hyper_params['non_local_theta_size'], hyper_params['non_local_phi_size'], hyper_params['non_local_g_size'], hyper_params["fdim"], hyper_params["zdim"], hyper_params["nonlocal_pools"], hyper_params['non_local_dim'], hyper_params["sigma"], hyper_params["past_length"], hyper_params["future_length"], False)
@@ -305,8 +311,6 @@ class Visualizer:
                     t = t[:,:,2:]
                     traj_new.append(t)
 
-
-
                 masks_new = []
                 for m in masks:
                     masks_new.append(m)
@@ -331,7 +335,6 @@ class Visualizer:
                 mask = mask_batches[0]
                 initial_pos = initial_pos_batches[0]
 
-
                 traj, mask, initial_pos = torch.DoubleTensor(traj).to(device), torch.DoubleTensor(mask).to(device), torch.DoubleTensor(initial_pos).to(device)
 
                 x = traj[:, :hyper_params["past_length"], :]
@@ -345,7 +348,7 @@ class Visualizer:
                 dest = y[:, -1, :]
                 all_l2_errors_dest = []
                 all_guesses = []
-                best_of_n = 20
+                best_of_n = 6
 
                 # print(np.reshape(x.cpu().numpy(), (-1, hyper_params["past_length"], 2))[0])
                 # print(initial_pos.cpu().numpy()[0] *1000)
@@ -440,7 +443,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--load_dir', type=str, default='../datasets/nus_dataset')
     parser.add_argument('--data_type', type=str, default='real')
-    parser.add_argument('--version', type=str, default='v1.0-mini')
+    parser.add_argument('--version', type=str, default='v1.0-trainval')
     parser.add_argument('--min_angle', type=float, default=None)
     parser.add_argument('--max_angle', type=float, default=None)
     parser.add_argument('--batch_size', type=int, default=1, help='Batch Size')

@@ -38,11 +38,12 @@ with open("../config/" + args.config_filename, 'r') as file:
 file.close()
 print(hyper_params)
 
-def train(train_dataset):
+def train(train_dataset, best_of_n = 1):
 
 	model.train()
 	train_loss = 0
 	total_rcl, total_kld, total_adl = 0, 0, 0
+	total_goal_sd, total_future_sd = 0, 0
 	criterion = nn.MSELoss()
 
 	for i, (traj, mask, initial_pos) in enumerate(zip(train_dataset.trajectory_batches, train_dataset.mask_batches, train_dataset.initial_pos_batches)):
@@ -55,20 +56,40 @@ def train(train_dataset):
 		dest = y[:, -1, :].to(device)
 		future = y[:, :-1, :].contiguous().view(y.size(0),-1).to(device)
 
-		dest_recon, mu, var, interpolated_future = model.forward(x, initial_pos, dest=dest, mask=mask, device=device)
+		all_guesses = []
+		all_future = []
+		all_l2_errors_dest = []
+
+		for _ in range(best_of_n):
+			dest_recon, mu, var, interpolated_future = model.forward(x, initial_pos, dest=dest, mask=mask, device=device)
+			all_guesses.append(dest_recon)
+			all_future.append(interpolated_future)
+			
+			l2error_sample = torch.norm(dest_recon - dest, dim = 1)
+			all_l2_errors_dest.append(l2error_sample)
+
+		indices = torch.argmin(torch.stack(all_l2_errors_dest), dim = 0)
+		best_guess_dest = torch.stack(all_guesses)[indices, torch.arange(x.size()[0]),  :]
+		best_interpolated_future = torch.stack(all_future)[indices, torch.arange(x.size()[0]),  :]
+		# print(indices)
+		# all_guesses.pop(indices)
+		# all_future.pop(indices)
 
 		optimizer.zero_grad()
-		rcl, kld, adl = calculate_loss(dest, dest_recon, mu, var, criterion, future, interpolated_future)
-		loss = rcl + kld*hyper_params["kld_reg"] + adl*hyper_params["adl_reg"]
+		rcl, kld, adl = calculate_loss(dest, best_guess_dest, mu, var, criterion, future, best_interpolated_future)
+		goal_sd_loss, future_sd_loss = calculate_self_distance(all_guesses, all_future, x, device)
+		loss = rcl + kld*hyper_params["kld_reg"] + adl*hyper_params["adl_reg"] - goal_sd_loss.mean()*hyper_params["goal_sd"] - future_sd_loss.mean()*hyper_params["future_sd"]
 		loss.backward()
 
 		train_loss += loss.item()
 		total_rcl += rcl.item()
 		total_kld += kld.item()
 		total_adl += adl.item()
+		total_goal_sd += goal_sd_loss.mean().item()
+		total_future_sd += future_sd_loss.mean().item()
 		optimizer.step()
 
-	return train_loss, total_rcl, total_kld, total_adl
+	return train_loss, total_rcl, total_kld, total_adl, total_goal_sd, total_future_sd
 
 
 def test(test_dataset, best_of_n = 1):
@@ -157,7 +178,7 @@ N = hyper_params["n_values"]
 writer = SummaryWriter(os.path.join('./', args.save_file + '_logs'))
 
 for e in tqdm(range(hyper_params['num_epochs'])):
-	train_loss, rcl, kld, adl = train(train_dataset)
+	train_loss, rcl, kld, adl, total_goal_sd, total_future_sd = train(train_dataset, best_of_n = N)
 	test_loss, final_point_loss_best, final_point_loss_avg = test(test_dataset, best_of_n = N)
 
 
@@ -181,11 +202,17 @@ for e in tqdm(range(hyper_params['num_epochs'])):
 	writer.add_scalar('data/RCL', rcl, e)
 	writer.add_scalar('data/KLD', kld, e)
 	writer.add_scalar('data/ADL', adl, e)
+	writer.add_scalar('data/total_goal_sd', total_goal_sd, e)
+	writer.add_scalar('data/total_future_sd', total_future_sd, e)
 	writer.add_scalar('data/Test ADE', test_loss, e)
 	writer.add_scalar('data/Test Average FDE (Across  all samples)', final_point_loss_avg, e)
 	writer.add_scalar('data/Test Min FDE', final_point_loss_best, e)
 	writer.add_scalar('data/Test Best ADE Loss So Far (N = )', best_test_loss, e)
 	writer.add_scalar('Test Best Min FDE (N = )', best_endpoint_loss, e)
+
+	print("Train_Loss Loss", train_loss)
+	print("total_goal_sd Loss", total_goal_sd)
+	print("Train total_future_sd", total_future_sd)
 
 	# print("Train Loss", train_loss)
 	# print("RCL", rcl)

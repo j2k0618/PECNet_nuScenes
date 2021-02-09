@@ -8,6 +8,7 @@ from torch import nn
 from torch.utils import data
 import random
 import numpy as np
+from tqdm import tqdm
 
 '''for sanity check'''
 def naive_social(p1_key, p2_key, all_data_dict):
@@ -76,9 +77,9 @@ def collect_data(set_name, dataset_type = 'image', batch_size=512, time_thresh=4
 
 	# rel_path = '/trajnet_{0}/{1}/stanford'.format(dataset_type, set_name)
 	if set_name =='train':
-		rel_path = '../train_carla_txt'
+		rel_path = '../train_txt'
 	elif set_name == 'val':
-		rel_path = '../val_carla_txt'
+		rel_path = '../val_txt'
 
 	full_dataset = []
 	full_masks = []
@@ -90,7 +91,9 @@ def collect_data(set_name, dataset_type = 'image', batch_size=512, time_thresh=4
 	social_id = 0
 	part_file = '/{}.txt'.format('*' if scene == None else scene)
 	
-	for file in glob.glob(root_path + rel_path + part_file):
+	file_list = glob.glob(root_path + rel_path + part_file)
+	for file_idx in tqdm(range(len(file_list))):
+		file = file_list[file_idx]
 		import os
 		if os.stat(file).st_size == 0:
 			continue
@@ -122,10 +125,14 @@ def collect_data(set_name, dataset_type = 'image', batch_size=512, time_thresh=4
 				current_batch = []
 				mask_batch = [[0 for i in range(int(batch_size*1.5))] for j in range(int(batch_size*1.5))]
 
-			current_batch.append((all_data_dict[curr_keys[0]]))
-			related_list.append(current_size)
-			current_size+=1
-			del data_by_id[curr_keys[0]]
+			if np.linalg.norm(np.array(all_data_dict[curr_keys[0]])[:,2:][0] - np.array(all_data_dict[curr_keys[0]])[:,2:][-1]) < len(np.array(all_data_dict[curr_keys[0]])):
+				del data_by_id[curr_keys[0]]
+				continue
+			else:
+				current_batch.append((all_data_dict[curr_keys[0]]))
+				related_list.append(current_size)
+				current_size+=1
+				del data_by_id[curr_keys[0]]
 
 			for i in range(1, len(curr_keys)):
 				if social_and_temporal_filter(curr_keys[0], curr_keys[i], all_data_dict, time_thresh, dist_tresh):
@@ -148,7 +155,7 @@ def generate_pooled_data(b_size, t_tresh, d_tresh, train=True, scene=None, verbo
 		full_train, full_masks_train = collect_data("train", batch_size=b_size, time_thresh=t_tresh, dist_tresh=d_tresh, scene=scene, verbose=verbose)
 		train = [full_train, full_masks_train]
 		# train_name = "../social_pool_data/train_{0}_{1}_{2}_{3}.pickle".format('all' if scene is None else scene[:-2] + scene[-1], b_size, t_tresh, d_tresh)
-		train_name = "../social_pool_data/train_carla.pickle"
+		train_name = "../social_pool_data/train_nusc_nostop.pickle"
 		with open(train_name, 'wb') as f:
 			pickle.dump(train, f)
 
@@ -156,7 +163,7 @@ def generate_pooled_data(b_size, t_tresh, d_tresh, train=True, scene=None, verbo
 		full_test, full_masks_test = collect_data("val", batch_size=b_size, time_thresh=t_tresh, dist_tresh=d_tresh, scene=scene, verbose=verbose)
 		test = [full_test, full_masks_test]
 		# test_name = "../social_pool_data/test_{0}_{1}_{2}_{3}.pickle".format('all' if scene is None else scene[:-2] + scene[-1], b_size, t_tresh, d_tresh)# + str(b_size) + "_" + str(t_tresh) + "_" + str(d_tresh) + ".pickle"
-		test_name = "../social_pool_data/val_carla.pickle"
+		test_name = "../social_pool_data/val_nusc_nostop.pickle"
 		with open(test_name, 'wb') as f:
 			pickle.dump(test, f)
 
@@ -167,6 +174,72 @@ def initial_pos(traj_batches):
 		batches.append(starting_pos)
 
 	return batches
+
+def batch_pairwise_dist(a):  
+    x= a
+    bs, num_points, points_dim = x.size()
+    xx = torch.bmm(x, x.transpose(2,1))
+    diag_ind = torch.arange(0, num_points).type(torch.cuda.LongTensor)
+    rx = xx[:, diag_ind, diag_ind].unsqueeze(1).expand_as(xx)
+    P = (rx.transpose(2,1) + rx - 2*xx)
+    P[P==0] = 1000
+    return P
+
+def norm_pairwise_dist(guess_tensor, path_distance):
+	import pdb
+	bs, num_points, points_dim = guess_tensor.size()
+	xx = torch.bmm(guess_tensor, guess_tensor.transpose(2,1))
+	diag_ind = torch.arange(0, num_points).type(torch.cuda.LongTensor)
+	rx = xx[:, diag_ind, diag_ind].unsqueeze(1).expand_as(xx)
+	distance = path_distance.reshape(bs, -1, num_points) + path_distance.reshape(bs, num_points, -1)
+	P = (rx.transpose(2,1) + rx - 2*xx)
+	P = torch.div(P,distance)
+	P[P==0] = 1000
+	return P
+
+def batch_NN_loss(x, y, dim=1):
+    assert dim != 0
+    # pdb.set_trace()
+    dist = batch_pairwise_dist(x,y)
+    values, indices = dist.min(dim=dim)
+    v, i = values.min(dim=1)
+    v = torch.clamp(v, 0, 40)
+    return v
+
+def calculate_self_distance(all_guesses, all_future, past, device):
+	guess_tensor = torch.stack(all_guesses).to(device)
+	# size as (num_agents, num_candidates, 2(x,y))
+	guess_tensor = guess_tensor.transpose(1,0)
+	future_tensor = torch.stack(all_future).to(device)
+	# size as (num_agents, num_candidates, future*2(x,y))
+	future_tensor = future_tensor.transpose(1,0)
+
+	agent_num = guess_tensor.size(0)
+	num_candidates = guess_tensor.size(1)
+	whole_path = torch.cat((future_tensor, guess_tensor), dim = 2)
+	whole_path = torch.reshape(whole_path, (agent_num, num_candidates, -1, 2))
+	path_distance = torch.sum(torch.norm(whole_path[:,:,:-1] - whole_path[:,:,1:], dim=3), dim=2)
+	# import pdb
+	# pdb.set_trace()
+
+	guess_dist = batch_pairwise_dist(guess_tensor)
+	# guess_dist = norm_pairwise_dist(guess_tensor, path_distance)
+	guess_min_dist, _ = guess_dist.min(dim=1)
+	guess_min_dist, _ = guess_min_dist.min(dim=1)
+	guess_min_dist = torch.clamp(guess_min_dist, 0, 10)
+
+	average_min_dist = 0
+	for i in range(future_tensor.size()[-1]//2):
+		step_dist = batch_pairwise_dist(future_tensor[:,:,i*2:i*2+1])
+		step_min_dist, _ = step_dist.min(dim=1)
+		step_min_dist, _ = step_min_dist.min(dim=1)
+		average_min_dist += step_min_dist
+	average_min_dist = torch.clamp(average_min_dist, 0, 10)
+	
+	return guess_min_dist, average_min_dist
+	
+
+	
 
 def calculate_loss(x, reconstructed_x, mean, log_var, criterion, future, interpolated_future):
 	# reconstruction loss
@@ -185,9 +258,9 @@ class SocialDataset(data.Dataset):
 		'Initialization'
 		# load_name = "../social_pool_data/{0}_{1}{2}_{3}_{4}.pickle".format(set_name, 'all_' if scene is None else scene[:-2] + scene[-1] + '_', b_size, t_tresh, d_tresh)
 		if set_name == "train":
-			load_name = "../social_pool_data/train_carla.pickle"
+			load_name = "../social_pool_data/train_nusc_nostop.pickle"
 		else:
-			load_name = "../social_pool_data/val_carla.pickle"
+			load_name = "../social_pool_data/val_nusc_nostop.pickle"
 		print(load_name)
 		with open(load_name, 'rb') as f:
 			data = pickle.load(f)
@@ -235,7 +308,7 @@ We've provided pickle files, but to generate new files for different datasets or
 Parameter1: batchsize, Parameter2: time_thresh, Param3: dist_thresh
 """
 if __name__ == "__main__":
-	generate_pooled_data(512,0.6,100000000000, train=True, verbose=True)
-	# generate_pooled_data(512,0.6,100000000000, train=False, verbose=True)
+	# generate_pooled_data(512,0.6,100000000000, train=True, verbose=True)
+	generate_pooled_data(512,0.6,100000000000, train=False, verbose=True)
 	# train_dataset = SocialDataset(set_name="train", b_size=512, t_tresh=12, d_tresh=100, verbose=True)
 	# test_dataset = SocialDataset(set_name="test", b_size=512, t_tresh=12, d_tresh=100, verbose=True)

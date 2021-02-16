@@ -630,8 +630,8 @@ def nuscenes_pecnet_collate(batch, test_set=False):
         current_path = []
         preprocessed = []
         
-        past_agents_traj = np.array([x[future_agent_masks[i]][:,::-1] for i, x in enumerate(past_agents_traj)])
-        decode_start_pos = np.array([x[future_agent_masks[i]] for i, x in enumerate(decode_start_pos)])
+        past_agents_traj = np.array([x[future_agent_masks[i]][:,::-1] for i, x in enumerate(past_agents_traj)], dtype="object")
+        decode_start_pos = np.array([x[future_agent_masks[i]] for i, x in enumerate(decode_start_pos)], dtype="object")
         past_agents_traj = np.concatenate(past_agents_traj, axis=0)
         curr_agents_traj = np.concatenate(decode_start_pos, axis=0)
         curr_agents_traj = np.expand_dims(curr_agents_traj, axis=1)

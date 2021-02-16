@@ -128,9 +128,10 @@ class Visualizer:
         # self.load_file = 'sd_0.150.15.pt'
         # self.load_file = 'nusc_model_nostop.pt.pt'
         # self.load_file = 'normFSD.pt'
-        # self.load_file = 'FSD.pt'
+        self.load_file = 'FSD.pt'
         # self.load_file = 'no_stop_normFSD.pt'
-        self.load_file = 'norm_changed.pt'
+        # self.load_file = 'norm_changed.pt'
+        # self.load_file = 'agent_weight.pt'
         self.num_trajectories = 6
 
     def save_to_video(self, dataloader):
@@ -443,7 +444,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--load_dir', type=str, default='../datasets/nus_dataset')
     parser.add_argument('--data_type', type=str, default='real')
-    parser.add_argument('--version', type=str, default='v1.0-trainval')
+    parser.add_argument('--version', type=str, default='v1.0-mini')
     parser.add_argument('--min_angle', type=float, default=None)
     parser.add_argument('--max_angle', type=float, default=None)
     parser.add_argument('--batch_size', type=int, default=1, help='Batch Size')

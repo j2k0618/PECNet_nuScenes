@@ -15,13 +15,15 @@ import yaml
 class CNN(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_size=(1024, 512), activation='relu', discrim=False, dropout=-1):
         super(CNN, self).__init__()
+        input_size = (1,64,64)
         dims = []
+        dims.append(1)
         dims.append(input_dim)
         dims.extend(hidden_size)
         dims.append(output_dim)
-        kernels = [3] * (len(dims)-1)
+        kernels = [1] * (len(dims)-1)
         self.layers = nn.ModuleList()
-        for i in range(len(dims)-1):
+        for i in range(len(dims)-2):
             self.layers.append(nn.Conv2d(dims[i], dims[i+1], kernels[i]))
 
         if activation == 'relu':
@@ -42,7 +44,7 @@ class CNN(nn.Module):
             elif self.sigmoid:
                 x_dummy = self.sigmoid(x_dummy)
 
-        self.fc = nn.Linear(x_dummy.numel(), dims[i+1])
+        self.fc = nn.Linear(x_dummy.numel(), dims[-1])
 
     def forward(self, x):
         for i in range(len(self.layers)):
@@ -53,6 +55,7 @@ class CNN(nn.Module):
                     x = nn.Dropout(min(0.1, self.dropout/3) if i == 1 else self.dropout)(x)
             elif self.sigmoid:
                 x = self.sigmoid(x)
+        x = torch.flatten(x, start_dim=1)
         x = self.fc(x)
         return x
 
@@ -90,7 +93,7 @@ class MLP(nn.Module):
 
 class PECNet(nn.Module):
 
-    def __init__(self, enc_past_size, enc_dest_size, enc_latent_size, dec_size, predictor_size, non_local_theta_size, non_local_phi_size, non_local_g_size, fdim, zdim, nonlocal_pools, non_local_dim, sigma, past_length, future_length, verbose):
+    def __init__(self, enc_past_size, enc_dest_size, enc_latent_size, dec_size, predictor_size, non_local_theta_size, non_local_phi_size, non_local_g_size, fdim, zdim, nonlocal_pools, non_local_dim, sigma, past_length, future_length, enc_map_size, verbose):
         '''
         Args:
             size parameters: Dimension sizes
@@ -108,17 +111,22 @@ class PECNet(nn.Module):
         # takes in the past
         self.encoder_past = MLP(input_dim = past_length*2, output_dim = fdim, hidden_size=enc_past_size)
         
+        # takes the map
+        self.encoder_map = CNN(input_dim = 3, output_dim = fdim, hidden_size=enc_map_size)
+
         self.encoder_dest = MLP(input_dim = 2, output_dim = fdim, hidden_size=enc_dest_size)
 
         self.encoder_latent = MLP(input_dim = 2*fdim, output_dim = 2*zdim, hidden_size=enc_latent_size)
 
-        self.decoder = MLP(input_dim = fdim + zdim, output_dim = 2, hidden_size=dec_size)
+        # self.decoder = MLP(input_dim = fdim + zdim, output_dim = 2, hidden_size=dec_size)
+        self.decoder_latent_map = MLP(input_dim = 2*fdim + zdim, output_dim = 2, hidden_size=dec_size)
 
         self.non_local_theta = MLP(input_dim = 2*fdim + 2, output_dim = non_local_dim, hidden_size=non_local_theta_size)
         self.non_local_phi = MLP(input_dim = 2*fdim + 2, output_dim = non_local_dim, hidden_size=non_local_phi_size)
         self.non_local_g = MLP(input_dim = 2*fdim + 2, output_dim = 2*fdim + 2, hidden_size=non_local_g_size)
 
-        self.predictor = MLP(input_dim = 2*fdim + 2, output_dim = 2*(future_length-1), hidden_size=predictor_size)
+        # self.predictor = MLP(input_dim = 2*fdim + 2, output_dim = 2*(future_length-1), hidden_size=predictor_size)
+        self.predictor_map = MLP(input_dim = 2*fdim + 2 + fdim, output_dim = 2*(future_length-1), hidden_size=predictor_size)
 
         architecture = lambda net: [l.in_features for l in net.layers] + [net.layers[-1].out_features]
 
@@ -158,7 +166,7 @@ class PECNet(nn.Module):
 
         return pooled_f + feat
 
-    def forward(self, x, initial_pos, dest = None, mask = None, device=torch.device('cpu')):
+    def forward(self, x, initial_pos, map, num_future_agents, dest = None, mask = None, device=torch.device('cpu')):
 
         # provide destination iff training
         # assert model.training
@@ -167,6 +175,8 @@ class PECNet(nn.Module):
 
         # encode
         ftraj = self.encoder_past(x)
+        map = torch.repeat_interleave(map, num_future_agents.long(), dim=0)
+        fmap = self.encoder_map(map)
 
         if not self.training:
             z = torch.Tensor(x.size(0), self.zdim)
@@ -189,8 +199,10 @@ class PECNet(nn.Module):
             z = eps.mul(var).add_(mu)
 
         z = z.double().to(device)
-        decoder_input = torch.cat((ftraj, z), dim = 1)
-        generated_dest = self.decoder(decoder_input)
+        # decoder_input = torch.cat((ftraj, z), dim = 1)
+        # generated_dest = self.decoder(decoder_input)
+        decoer_input_map = torch.cat((ftraj, z, fmap), dim = 1)
+        generated_dest = self.decoder_latent_map(decoer_input_map)
 
         if self.training:
             # prediction in training, no best selection
@@ -202,13 +214,17 @@ class PECNet(nn.Module):
                 # non local social pooling
                 prediction_features = self.non_local_social_pooling(prediction_features, mask)
 
-            pred_future = self.predictor(prediction_features)
+            prediction_features = torch.cat((prediction_features, fmap), dim = 1)
+            pred_future = self.predictor_map(prediction_features)
             return generated_dest, mu, logvar, pred_future
 
         return generated_dest
 
     # separated for forward to let choose the best destination
-    def predict(self, past, generated_dest, mask, initial_pos):
+    def predict(self, past, generated_dest, mask, initial_pos, map, num_future_agents):
+        map = torch.repeat_interleave(map, num_future_agents.long(), dim=0)
+        fmap = self.encoder_map(map)
+
         ftraj = self.encoder_past(past)
         generated_dest_features = self.encoder_dest(generated_dest)
         prediction_features = torch.cat((ftraj, generated_dest_features, initial_pos), dim = 1)
@@ -217,7 +233,8 @@ class PECNet(nn.Module):
             # non local social pooling
             prediction_features = self.non_local_social_pooling(prediction_features, mask)
 
-        interpolated_future = self.predictor(prediction_features)
+        prediction_features = torch.cat((prediction_features, fmap), dim = 1)
+        interpolated_future = self.predictor_map(prediction_features)
         return interpolated_future
 
 if __name__ == "__main__":

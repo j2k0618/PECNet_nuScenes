@@ -15,7 +15,7 @@ from nuscenes.prediction.input_representation.combinators import Rasterizer
 
 import sys
 sys.path.append("./utils/")
-from models import *
+from models_map import *
 from social_utils import *
 
 import cv2
@@ -35,8 +35,10 @@ def train_single_epoch(model, optimizer, train_loader, best_of_n, device, hyper_
     total_goal_sd, total_future_sd = 0, 0
     criterion = nn.MSELoss()
 
-    for i, (traj, mask, initial_pos, _, _, _) in tqdm(enumerate(train_loader), total=len(train_loader), desc='train'):
+    for i, (traj, mask, initial_pos, _, num_future_agents, map) in tqdm(enumerate(train_loader), total=len(train_loader), desc='train'):
         traj, mask, initial_pos = torch.DoubleTensor(traj).to(device), torch.DoubleTensor(mask).to(device), torch.DoubleTensor(initial_pos).to(device)
+        map = torch.DoubleTensor(map.double()).to(device)
+        num_future_agents = torch.DoubleTensor(num_future_agents).to(device)
         x = traj[:, :hyper_params['past_length'], :]
         y = traj[:, hyper_params['past_length']:, :]
 
@@ -50,7 +52,7 @@ def train_single_epoch(model, optimizer, train_loader, best_of_n, device, hyper_
         all_l2_errors_dest = []
 
         for _ in range(best_of_n):
-            dest_recon, mu, var, interpolated_future = model.forward(x, initial_pos, dest=dest, mask=mask, device=device)
+            dest_recon, mu, var, interpolated_future = model.forward(x, initial_pos, map, num_future_agents, dest=dest, mask=mask, device=device)
             all_guesses.append(dest_recon)
             all_future.append(interpolated_future)
             
@@ -87,8 +89,10 @@ def test_single_epoch(model, optimizer, test_loader, best_of_n, device, hyper_pa
     assert best_of_n >= 1 and type(best_of_n) == int
 
     with torch.no_grad():
-        for i, (traj, mask, initial_pos, scene_id, _, _) in tqdm(enumerate(test_loader), total=len(test_loader), desc='val'):
+        for i, (traj, mask, initial_pos, scene_id, num_future_agents, map) in tqdm(enumerate(test_loader), total=len(test_loader), desc='val'):
             traj, mask, initial_pos = torch.DoubleTensor(traj).to(device), torch.DoubleTensor(mask).to(device), torch.DoubleTensor(initial_pos).to(device)
+            map = torch.DoubleTensor(map.double()).to(device)
+            num_future_agents = torch.DoubleTensor(num_future_agents).to(device)
             x = traj[:, :hyper_params['past_length'], :]
             y = traj[:, hyper_params['past_length']:, :]
             y = y.cpu().numpy()
@@ -102,7 +106,7 @@ def test_single_epoch(model, optimizer, test_loader, best_of_n, device, hyper_pa
             all_guesses = []
             for _ in range(best_of_n):
 
-                dest_recon = model.forward(x, initial_pos, device=device)
+                dest_recon = model.forward(x, initial_pos, map, num_future_agents, device=device)
                 dest_recon = dest_recon.cpu().numpy()
                 all_guesses.append(dest_recon)
 
@@ -125,7 +129,7 @@ def test_single_epoch(model, optimizer, test_loader, best_of_n, device, hyper_pa
             best_guess_dest = torch.DoubleTensor(best_guess_dest).to(device)
 
             # using the best guess for interpolation
-            interpolated_future = model.predict(x, best_guess_dest, mask, initial_pos)
+            interpolated_future = model.predict(x, best_guess_dest, mask, initial_pos, map, num_future_agents)
             interpolated_future = interpolated_future.cpu().numpy()
             best_guess_dest = best_guess_dest.cpu().numpy()
 
@@ -177,7 +181,7 @@ def train(args):
 
     print(f'Train Examples: {len(train_dataset)} | Valid Examples: {len(val_dataset)}')
 
-    model = PECNet(hyper_params["enc_past_size"], hyper_params["enc_dest_size"], hyper_params["enc_latent_size"], hyper_params["dec_size"], hyper_params["predictor_hidden_size"], hyper_params['non_local_theta_size'], hyper_params['non_local_phi_size'], hyper_params['non_local_g_size'], hyper_params["fdim"], hyper_params["zdim"], hyper_params["nonlocal_pools"], hyper_params['non_local_dim'], hyper_params["sigma"], hyper_params["past_length"], hyper_params["future_length"], args.verbose)
+    model = PECNet(hyper_params["enc_past_size"], hyper_params["enc_dest_size"], hyper_params["enc_latent_size"], hyper_params["dec_size"], hyper_params["predictor_hidden_size"], hyper_params['non_local_theta_size'], hyper_params['non_local_phi_size'], hyper_params['non_local_g_size'], hyper_params["fdim"], hyper_params["zdim"], hyper_params["nonlocal_pools"], hyper_params['non_local_dim'], hyper_params["sigma"], hyper_params["past_length"], hyper_params["future_length"], hyper_params["enc_map_size"], args.verbose)
     model = model.double().to(device)
     optimizer = optim.Adam(model.parameters(), lr=  hyper_params["learning_rate"])
 
@@ -230,8 +234,8 @@ if __name__ == "__main__":
     parser.add_argument('--version', type=str, default='v1.0-trainval')
     parser.add_argument('--min_angle', type=float, default=None)
     parser.add_argument('--max_angle', type=float, default=None)
-    parser.add_argument('--batch_size', type=int, default=256, help='Batch Size')
-    parser.add_argument('--num_workers', type=int, default=0, help="")
+    parser.add_argument('--batch_size', type=int, default=16, help='Batch Size')
+    parser.add_argument('--num_workers', type=int, default=32, help="")
     parser.add_argument('--config_filename', '-cfn', type=str, default='optimal.yaml')
     parser.add_argument('--verbose', '-v', action='store_true')
     parser.add_argument('--save_file', '-sf', type=str, default='PECNET_social_model.pt')

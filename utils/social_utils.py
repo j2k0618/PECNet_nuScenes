@@ -234,6 +234,7 @@ def calculate_self_distance(all_guesses, all_future, past, device):
 		step_min_dist, _ = step_dist.min(dim=1)
 		step_min_dist, _ = step_min_dist.min(dim=1)
 		average_min_dist += step_min_dist
+	average_min_dist = average_min_dist/(future_tensor.size()[-1]//2)
 	average_min_dist = torch.clamp(average_min_dist, 0, 10)
 	
 	return guess_min_dist, average_min_dist
